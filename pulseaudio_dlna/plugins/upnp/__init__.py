@@ -25,6 +25,7 @@ import pulseaudio_dlna.plugins
 import pulseaudio_dlna.plugins.upnp.ssdp
 import pulseaudio_dlna.plugins.upnp.ssdp.listener
 import pulseaudio_dlna.plugins.upnp.ssdp.discover
+from pulseaudio_dlna.plugins.null.renderer import NullMediaRendererFactory
 from pulseaudio_dlna.plugins.upnp.renderer import (
     CoinedUpnpMediaRenderer, UpnpMediaRendererFactory)
 
@@ -41,6 +42,11 @@ class DLNAPlugin(pulseaudio_dlna.plugins.BasePlugin):
     def __init__(self, *args):
         pulseaudio_dlna.plugins.BasePlugin.__init__(self, *args)
 
+    def get_fromudn(self, udn, flavour):
+        if (flavour == 'DLNA'):
+            return NullMediaRendererFactory.from_udn(udn, flavour)
+        return None
+    
     def lookup(self, url, xml):
         return UpnpMediaRendererFactory.from_xml(
             url, xml, CoinedUpnpMediaRenderer)

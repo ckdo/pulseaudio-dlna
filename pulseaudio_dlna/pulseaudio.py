@@ -158,14 +158,14 @@ class PulseAudio(object):
         except dbus.exceptions.DBusException:
             return False
 
-    def create_null_sink(self, sink_name, sink_description):
+    def create_null_sink(self, sink_name, sink_description, sink_udn):
         cmd = [
             'pactl',
             'load-module',
             'module-null-sink',
             'sink_name="{}"'.format(sink_name),
-            'sink_properties=device.description="{}"'.format(
-                sink_description.replace(' ', '\ ')
+            'sink_properties=\'device.description="{}" device.udn="{}"\''.format(
+                sink_description.replace(' ', '\ '), sink_udn
             ),
         ]
         module_id = int(subprocess.check_output(cmd).strip())
@@ -310,6 +310,7 @@ class PulseSinkFactory(PulseBaseFactory):
 
             properties = obj.Get('org.PulseAudio.Core1.Device', 'PropertyList')
             description_bytes = properties.get('device.description', [])
+            udn_bytes = properties.get('device.udn', [])
             module_path = unicode(
                 obj.Get('org.PulseAudio.Core1.Device', 'OwnerModule'))
 
@@ -318,6 +319,7 @@ class PulseSinkFactory(PulseBaseFactory):
                 index=unicode(obj.Get('org.PulseAudio.Core1.Device', 'Index')),
                 name=unicode(obj.Get('org.PulseAudio.Core1.Device', 'Name')),
                 label=self._convert_bytes_to_unicode(description_bytes),
+                udn=self._convert_bytes_to_unicode(udn_bytes),
                 module=PulseModuleFactory.new(bus, module_path),
             )
         except dbus.exceptions.DBusException:
@@ -332,7 +334,7 @@ class PulseSink(object):
 
     __shared_state = {}
 
-    def __init__(self, object_path, index, name, label, module,
+    def __init__(self, object_path, index, name, label, udn, module,
                  fallback_sink=None):
         if object_path not in self.__shared_state:
             self.__shared_state[object_path] = {}
@@ -342,6 +344,7 @@ class PulseSink(object):
         self.index = index
         self.name = name
         self.label = label or name
+        self.udn = udn
         self.module = module
         self.fallback_sink = fallback_sink
 
@@ -374,9 +377,21 @@ class PulseSink(object):
         subprocess.check_output(cmd)
 
     def switch_streams_to_fallback_source(self):
+        stream_switched = 0
         if self.fallback_sink is not None:
             for stream in self.streams:
-                stream.switch_to_source(self.fallback_sink.index)
+                disable_fallback=False
+                for sink in self.sinks:
+                    if stream.device == sink.object_path:
+                        if sink.alwayson:
+                            disable_fallback=True
+                    break
+                if not disable_fallback:
+                    stream.switch_to_source(self.fallback_sink.index)
+                    stream_switched = stream_switched + 1
+                else:
+                    logger.info('No fallback for alwayson device {}'.format(sink.name))
+        return stream_switched
 
     def __eq__(self, other):
         return self.object_path == other.object_path
@@ -587,16 +602,15 @@ class PulseWatcher(PulseAudio):
     def switch_back(self, bridge, reason):
         title = 'Device "{label}"'.format(label=bridge.device.label)
         if self.fallback_sink:
-            message = ('{reason} Your streams were switched '
-                       'back to <b>{name}</b>'.format(
-                           reason=reason,
-                           name=self.fallback_sink.label))
-            pulseaudio_dlna.notification.show(title, message)
-
             self._block_device_handling(bridge.sink.object_path)
             if bridge.sink == self.default_sink:
                 self.fallback_sink.set_as_default_sink()
-            bridge.sink.switch_streams_to_fallback_source()
+            if bridge.sink.switch_streams_to_fallback_source():
+                message = ('{reason} Some streams were switched '
+                           'back to <b>{name}</b>'.format(
+                               reason=reason,
+                               name=self.fallback_sink.label))
+                pulseaudio_dlna.notification.show(title, message)                               
         else:
             message = ('Your streams could not get switched back because you '
                        'did not set a default sink in pulseaudio.')
@@ -716,8 +730,9 @@ class PulseWatcher(PulseAudio):
                         self.switch_back(bridge, message)
                     continue
             if bridge.sink.object_path == sink_path:
-                if bridge.device.state == bridge.device.IDLE or \
-                   bridge.device.state == bridge.device.PAUSE:
+                if len(bridge.sink.streams) > 0 and \
+                   (bridge.device.state == bridge.device.IDLE or \
+                   bridge.device.state == bridge.device.PAUSE):
                     logger.info(
                         'Instructing the device "{}" to play ...'.format(
                             bridge.device.label))
@@ -740,8 +755,10 @@ class PulseWatcher(PulseAudio):
         return False
 
     def add_device(self, device):
-        sink = self.create_null_sink(
-            device.short_name, device.label)
+        matches = (sink for sink in self.sinks if sink.udn == device.udn)
+        #TODO: Add only if not already there
+        
+        sink = self.create_null_sink(device.short_name, device.label, device.udn)
         self.bridges.append(PulseBridge(sink, device))
         self.update()
         self.share_bridges()
@@ -776,3 +793,15 @@ class PulseWatcher(PulseAudio):
                     self.update()
                     self.share_bridges()
                     break
+                    
+    def replace_device(self, device):
+        logger.info('Replacing device: {}'.format(device))
+        for bridge in self.bridges:
+            if bridge.device == device:
+                if bridge.device.alwayson:
+                    for bridge in self.bridges:
+                        if bridge.device.udn == device.udn:
+                            bridge.device = device
+                            self.share_bridges()
+                            self._delayed_handle_sink_update(bridge.sink.object_path)
+                            break           

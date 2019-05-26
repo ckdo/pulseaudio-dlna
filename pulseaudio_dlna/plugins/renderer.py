@@ -51,6 +51,7 @@ class BaseRenderer(object):
         self._model_name = model_name
         self._model_number = model_number
         self._manufacturer = manufacturer
+        self._alwayson = None
 
         self._name = None
         self._short_name = None
@@ -80,6 +81,14 @@ class BaseRenderer(object):
     def model_name(self, value):
         self._model_name = value
 
+    @property
+    def alwayson(self):
+        return self._alwayson 
+    
+    @alwayson.setter
+    def alwayson(self, value):
+        self._alwayson = value
+        
     @property
     def model_number(self):
         return self._model_number
@@ -253,6 +262,7 @@ class BaseRenderer(object):
 
     def set_rules_from_config(self, config):
         self.name = config['name']
+        self.alwayson = config.get('alwayson', None)
         for rule in config.get('rules', []):
             self.rules.append(rule)
         for codec_properties in config.get('codecs', []):
@@ -310,7 +320,7 @@ class BaseRenderer(object):
 
     def __str__(self, detailed=False):
         return (
-            '<{} name="{}" short="{}" state="{}" udn="{}" model_name="{}" '
+            '<{} name="{}" short="{}" state="{}" udn="{}" model_name="{}" alwayson="{}" '
             'model_number="{}" manufacturer="{}" timeout="{}">{}{}').format(
                 self.__class__.__name__,
                 self.name,
@@ -318,6 +328,7 @@ class BaseRenderer(object):
                 self.state,
                 self.udn,
                 self.model_name,
+                self.alwayson,
                 self.model_number,
                 self.manufacturer,
                 self.REQUEST_TIMEOUT,

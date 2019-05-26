@@ -37,9 +37,11 @@ class Holder(object):
         self.device_config = device_config or {}
         self.message_queue = message_queue
         self.devices = {}
+        self.nulldevices = {}
         self.lock = threading.Lock()
 
     def search(self, ttl=None):
+        self._init()
         threads = []
         for plugin in self.plugins:
             thread = threading.Thread(
@@ -56,6 +58,18 @@ class Holder(object):
 
         logger.debug('Holder.search() quit')
 
+    def _init(self):
+        for udn, config in self.device_config.items():
+            if config.get("alwayson", None):
+                for plugin in self.plugins:
+                    nulldevice=plugin.get_fromudn(udn, config["flavour"])
+                    if nulldevice:
+                        self.nulldevices[udn]={}
+                        self.nulldevices[udn]["device"]=nulldevice
+                        self.nulldevices[udn]["inuse"]=0
+                        self.add_device(nulldevice)
+            
+      
     def lookup(self, locations):
         xmls = {}
         for url in locations:
@@ -83,9 +97,12 @@ class Holder(object):
             return
         try:
             self.lock.acquire()
-            if device.udn not in self.devices:
+            if device.udn not in self.devices or \
+               (device.udn in self.devices and device.udn in self.nulldevices and self.nulldevices[device.udn]["inuse"] == 1):
+            
                 if device.validate():
                     config = self.device_config.get(device.udn, None)
+                    logger.debug("config is {}".format(config))
                     device.activate(config)
                     if self.stream_ip and self.stream_port:
                         device.set_server_location(
@@ -96,8 +113,20 @@ class Holder(object):
                             logger.info(
                                 'Using device configuration:\n{}'.format(
                                     device.__str__(True)))
+                        
+                        if device.udn not in self.devices:
+                            self._send_message('add_device', device)
+                        else:
+                            logger.debug(
+                                'Updating device:\n{} with device\n{}'.format(
+                                    self.devices[device.udn], device.__str__(True)))
+                            self._send_message('replace_device', device)
                         self.devices[device.udn] = device
-                        self._send_message('add_device', device)
+                        if device.udn in self.nulldevices:
+                            if device is self.nulldevices[device.udn]["device"]:
+                                self.nulldevices[device.udn]["inuse"]=1
+                            else:
+                                self.nulldevices[device.udn]["inuse"]=0
                     else:
                         logger.info('Skipped the device "{name}" ...'.format(
                             name=device.label))
@@ -113,8 +142,14 @@ class Holder(object):
         try:
             self.lock.acquire()
             device = self.devices[device_id]
-            self._send_message('remove_device', device)
-            del self.devices[device_id]
+            if not device.alwayson:
+              self._send_message('remove_device', device)
+              del self.devices[device_id]
+            else:
+              logger.info('Do not remove always on device {}'.format(device.name)) 
+              self.devices[device_id]=self.nulldevices[device_id]["device"]
+              self.nulldevices[device_id]["inuse"]=1
+              self._send_message('replace_device', device)
         finally:
             self.lock.release()
 

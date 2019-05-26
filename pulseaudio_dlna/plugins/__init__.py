@@ -31,6 +31,9 @@ class BasePlugin(object):
     def discover(self, ttl):
         raise NotImplementedError()
 
+    def get_fromudn(self, udn, flavour):
+        return None
+        
     @staticmethod
     def add_device_after(f, *args):
         @functools.wraps(f)

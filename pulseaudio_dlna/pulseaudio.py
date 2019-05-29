@@ -377,21 +377,9 @@ class PulseSink(object):
         subprocess.check_output(cmd)
 
     def switch_streams_to_fallback_source(self):
-        stream_switched = 0
         if self.fallback_sink is not None:
             for stream in self.streams:
-                disable_fallback=False
-                for sink in self.sinks:
-                    if stream.device == sink.object_path:
-                        if sink.alwayson:
-                            disable_fallback=True
-                    break
-                if not disable_fallback:
-                    stream.switch_to_source(self.fallback_sink.index)
-                    stream_switched = stream_switched + 1
-                else:
-                    logger.info('No fallback for alwayson device {}'.format(sink.name))
-        return stream_switched
+                stream.switch_to_source(self.fallback_sink.index)
 
     def __eq__(self, other):
         return self.object_path == other.object_path
@@ -602,15 +590,16 @@ class PulseWatcher(PulseAudio):
     def switch_back(self, bridge, reason):
         title = 'Device "{label}"'.format(label=bridge.device.label)
         if self.fallback_sink:
+            message = ('{reason} Your streams were switched '
+                       'back to <b>{name}</b>'.format(
+                           reason=reason,
+                           name=self.fallback_sink.label))
+            pulseaudio_dlna.notification.show(title, message)
+
             self._block_device_handling(bridge.sink.object_path)
             if bridge.sink == self.default_sink:
                 self.fallback_sink.set_as_default_sink()
-            if bridge.sink.switch_streams_to_fallback_source():
-                message = ('{reason} Some streams were switched '
-                           'back to <b>{name}</b>'.format(
-                               reason=reason,
-                               name=self.fallback_sink.label))
-                pulseaudio_dlna.notification.show(title, message)                               
+            bridge.sink.switch_streams_to_fallback_source()
         else:
             message = ('Your streams could not get switched back because you '
                        'did not set a default sink in pulseaudio.')
